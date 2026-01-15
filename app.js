@@ -8,7 +8,6 @@ const SLEEVE_RADIUS = 7;
 
 // Strings: ~1/5 of sleeve thickness (14/5≈2.8 -> 3)
 const STRING_THICKNESS = 3;
-// Make strings easier to click/drag
 const STRING_HIT_WIDTH = 18;
 
 // -------------------- State --------------------
@@ -46,40 +45,7 @@ function safePdfFilename(shipName) {
     .replace(/\s+/g, " ");
 }
 
-// -------------------- API --------------------
-async function apiList() {
-  const r = await fetch("/api/list");
-  return await r.json();
-}
-
-async function apiLoad(name) {
-  const r = await fetch("/api/load?name=" + encodeURIComponent(name));
-  if (!r.ok) throw new Error("Load failed");
-  return await r.json();
-}
-
-async function apiSave(name, data) {
-  const r = await fetch("/api/save?name=" + encodeURIComponent(name), {
-    method: "POST",
-    headers: { "Content-Type":"application/json" },
-    body: JSON.stringify(data)
-  });
-  if (!r.ok) throw new Error("Save failed");
-  return await r.json();
-}
-
-// Export PDF by sending a PNG snapshot (so PDF matches screen exactly)
-async function apiExportPdf(filename, pngBase64) {
-  const r = await fetch("/api/export?name=" + encodeURIComponent(filename), {
-    method: "POST",
-    headers: { "Content-Type":"application/json" },
-    body: JSON.stringify({ png_base64: pngBase64 })
-  });
-  if (!r.ok) throw new Error("Export failed");
-  return await r.blob();
-}
-
-// -------------------- String math (keep length when rotating) --------------------
+// -------------------- String math --------------------
 function stringLength(l) {
   const o = normOrient(l.orientation);
   return o === "V" ? Math.abs((l.y2 ?? 0) - (l.y1 ?? 0)) : Math.abs((l.x2 ?? 0) - (l.x1 ?? 0));
@@ -91,11 +57,11 @@ function enforceHV(l) {
   l.y1 = clamp(l.y1, 0, PAGE_H);
   l.x2 = clamp(l.x2, 0, PAGE_W);
   l.y2 = clamp(l.y2, 0, PAGE_H);
-
   if (l.orientation === "H") l.y2 = l.y1;
   else l.x2 = l.x1;
 }
 
+// preserves length when switching H <-> V
 function setStringOrientation(l, newO) {
   const oldO = normOrient(l.orientation);
   newO = normOrient(newO);
@@ -130,15 +96,12 @@ function setStringOrientation(l, newO) {
   }
 }
 
-// -------------------- UI Binding --------------------
+// -------------------- UI --------------------
 function bindUI() {
   ui = {
-    fileList: qs("fileList"),
-    btnLoad: qs("btnLoad"),
-    cfgName: qs("cfgName"),
-
     shipName: qs("shipName"),
     titleText: qs("titleText"),
+
     showLabels: qs("showLabels"),
     lblStarboard: qs("lblStarboard"),
     lblPort: qs("lblPort"),
@@ -152,7 +115,6 @@ function bindUI() {
     addString: qs("addString"),
     dupSelected: qs("dupSelected"),
     delSelected: qs("delSelected"),
-    saveCfg: qs("saveCfg"),
     exportPdf: qs("exportPdf"),
 
     selNone: qs("selNone"),
@@ -181,7 +143,6 @@ function bindUI() {
 
   // holds
   ui.addHold.onclick = () => {
-    cfg.holds = cfg.holds || [];
     cfg.holds.push({ hold: (cfg.holds.at(-1)?.hold || 0) + 1, sleeves: 0 });
     renderHoldsTable();
     drawAll();
@@ -189,11 +150,9 @@ function bindUI() {
 
   // add sleeve
   ui.addSleeve.onclick = () => {
-    cfg.sleeves_abs = cfg.sleeves_abs || [];
     cfg.sleeves_abs.push({
       id: uid("s"),
-      x: 360,
-      y: 420,
+      x: 360, y: 420,
       orientation: "H",
       fill: cfg.colors.sleeve_fill,
       stroke: cfg.colors.stroke,
@@ -204,7 +163,6 @@ function bindUI() {
 
   // add string
   ui.addString.onclick = () => {
-    cfg.strings_abs = cfg.strings_abs || [];
     cfg.strings_abs.push({
       id: uid("l"),
       x1: 240, y1: 480,
@@ -215,34 +173,24 @@ function bindUI() {
     drawAll();
   };
 
-  // duplicate / delete
   ui.delSelected.onclick = () => deleteSelected();
   ui.dupSelected.onclick = () => duplicateSelected();
 
-  // save config
-  ui.saveCfg.onclick = async () => {
-    await apiSave(ui.cfgName.value, cfg);
-    await refreshFileList(ui.cfgName.value);
-    alert("Saved");
-  };
-
-  // EXPORT PDF (EXACT snapshot)
-  ui.exportPdf.onclick = async () => {
+  // export PDF in-browser (no backend)
+  ui.exportPdf.onclick = () => {
     dragString = null;
 
-    // store current stage state
     const oldScaleX = stage.scaleX();
     const oldScaleY = stage.scaleY();
     const oldW = stage.width();
     const oldH = stage.height();
 
-    // force 1:1 for export
+    // force 1:1 export
     stage.scale({ x: 1, y: 1 });
     stage.width(PAGE_W);
     stage.height(PAGE_H);
     stage.draw();
 
-    // high-res snapshot
     const png = stage.toDataURL({ pixelRatio: 2 });
 
     // restore view
@@ -252,46 +200,18 @@ function bindUI() {
     stage.draw();
     if (typeof applyResponsiveScale === "function") applyResponsiveScale();
 
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+    pdf.addImage(png, "PNG", 0, 0, PAGE_W, PAGE_H);
+
     const base = safePdfFilename(cfg.header.ship_name);
-    const filename = `${base} - Sleeves Diagram.pdf`;
-
-    const blob = await apiExportPdf(filename, png);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // load config
-  ui.btnLoad.onclick = async () => {
-    const name = ui.fileList.value;
-    if (!name) return;
-
-    cfg = await apiLoad(name);
-    cfg.sleeves_abs = cfg.sleeves_abs || [];
-    cfg.strings_abs = cfg.strings_abs || [];
-    cfg.holds = cfg.holds || [];
-
-    // normalize strings
-    cfg.strings_abs.forEach(l => {
-      l.orientation = normOrient(l.orientation);
-      if (!l.stroke_width || l.stroke_width < STRING_THICKNESS) l.stroke_width = STRING_THICKNESS;
-      enforceHV(l);
-      if (stringLength(l) < 10) setStringOrientation(l, l.orientation);
-    });
-
-    ui.cfgName.value = name;
-    selected = null;
-    syncUIFromCfg();
-    drawAll();
+    pdf.save(`${base} - Sleeves Diagram.pdf`);
   };
 
   // apply sleeve edits
   ui.applySleeve.onclick = () => {
     if (!selected || selected.type !== "sleeve") return;
-    const s = (cfg.sleeves_abs || []).find(x => x.id === selected.id);
+    const s = cfg.sleeves_abs.find(x => x.id === selected.id);
     if (!s) return;
 
     s.orientation = normOrient(ui.sOrient.value || "H");
@@ -305,10 +225,10 @@ function bindUI() {
     drawAll();
   };
 
-  // apply string edits (rotate without disappearing)
+  // apply string edits
   ui.applyString.onclick = () => {
     if (!selected || selected.type !== "string") return;
-    const l = (cfg.strings_abs || []).find(x => x.id === selected.id);
+    const l = cfg.strings_abs.find(x => x.id === selected.id);
     if (!l) return;
 
     const oldO = normOrient(l.orientation);
@@ -335,30 +255,26 @@ function bindUI() {
     drawAll();
   };
 
-  // delete key
   document.addEventListener("keydown", (e) => {
     if (e.key === "Delete") deleteSelected();
   });
 }
 
-// -------------------- UI Sync --------------------
 function syncUIFromCfg() {
   ui.shipName.value = cfg.header.ship_name || "";
   ui.titleText.value = cfg.header.title || "";
 
   ui.showLabels.checked = !!cfg.side_labels?.show;
-  ui.lblStarboard.value = cfg.side_labels?.starboard || "STARBOARD";
-  ui.lblPort.value = cfg.side_labels?.port || "PORT";
-  ui.lblForward.value = cfg.side_labels?.forward || "Forward";
-  ui.lblAft.value = cfg.side_labels?.aft || "Aft";
+  ui.lblStarboard.value = cfg.side_labels.starboard || "STARBOARD";
+  ui.lblPort.value = cfg.side_labels.port || "PORT";
+  ui.lblForward.value = cfg.side_labels.forward || "Forward";
+  ui.lblAft.value = cfg.side_labels.aft || "Aft";
 
   renderHoldsTable();
 }
 
 function renderHoldsTable() {
   ui.holdsBody.innerHTML = "";
-  cfg.holds = cfg.holds || [];
-
   cfg.holds.forEach((h, idx) => {
     const tr = document.createElement("tr");
 
@@ -380,6 +296,7 @@ function renderHoldsTable() {
     const td3 = document.createElement("td");
     const btn = document.createElement("button");
     btn.textContent = "X";
+    btn.className = "smallbtn";
     btn.onclick = () => { cfg.holds.splice(idx, 1); renderHoldsTable(); drawAll(); };
     td3.appendChild(btn);
 
@@ -397,7 +314,7 @@ function setSelected(sel) {
   ui.selString.style.display = (selected && selected.type === "string") ? "block" : "none";
 
   if (selected?.type === "sleeve") {
-    const s = (cfg.sleeves_abs || []).find(x => x.id === selected.id);
+    const s = cfg.sleeves_abs.find(x => x.id === selected.id);
     if (!s) return;
     ui.sx.value = s.x;
     ui.sy.value = s.y;
@@ -405,7 +322,7 @@ function setSelected(sel) {
   }
 
   if (selected?.type === "string") {
-    const l = (cfg.strings_abs || []).find(x => x.id === selected.id);
+    const l = cfg.strings_abs.find(x => x.id === selected.id);
     if (!l) return;
     ui.lOrient.value = normOrient(l.orientation);
     ui.x1.value = l.x1; ui.y1.value = l.y1; ui.x2.value = l.x2; ui.y2.value = l.y2;
@@ -416,9 +333,9 @@ function deleteSelected() {
   if (!selected) return;
 
   if (selected.type === "sleeve") {
-    cfg.sleeves_abs = (cfg.sleeves_abs || []).filter(x => x.id !== selected.id);
+    cfg.sleeves_abs = cfg.sleeves_abs.filter(x => x.id !== selected.id);
   } else if (selected.type === "string") {
-    cfg.strings_abs = (cfg.strings_abs || []).filter(x => x.id !== selected.id);
+    cfg.strings_abs = cfg.strings_abs.filter(x => x.id !== selected.id);
   }
   selected = null;
   drawAll();
@@ -428,22 +345,21 @@ function duplicateSelected() {
   if (!selected) return;
 
   if (selected.type === "sleeve") {
-    const s = (cfg.sleeves_abs || []).find(x => x.id === selected.id);
+    const s = cfg.sleeves_abs.find(x => x.id === selected.id);
     if (!s) return;
     const copy = { ...s, id: uid("s"), x: clamp(s.x + 10, 0, PAGE_W - 60), y: clamp(s.y + 10, 0, PAGE_H - 60) };
     cfg.sleeves_abs.push(copy);
     selected = { type: "sleeve", id: copy.id };
   } else if (selected.type === "string") {
-    const l = (cfg.strings_abs || []).find(x => x.id === selected.id);
+    const l = cfg.strings_abs.find(x => x.id === selected.id);
     if (!l) return;
-    const copy = { ...l, id: uid("l") };
 
+    const copy = { ...l, id: uid("l") };
     copy.x1 = clamp(l.x1 + 10, 0, PAGE_W);
     copy.y1 = clamp(l.y1 + 10, 0, PAGE_H);
     copy.x2 = clamp(l.x2 + 10, 0, PAGE_W);
     copy.y2 = clamp(l.y2 + 10, 0, PAGE_H);
-
-    if (!copy.stroke_width || copy.stroke_width < STRING_THICKNESS) copy.stroke_width = STRING_THICKNESS;
+    copy.stroke_width = STRING_THICKNESS;
 
     enforceHV(copy);
     if (stringLength(copy) < 10) setStringOrientation(copy, copy.orientation);
@@ -465,7 +381,6 @@ function initStage() {
   layer = new Konva.Layer();
   stage.add(layer);
 
-  // deselect on empty click
   stage.on("click", (e) => {
     if (e.target === stage) {
       setSelected(null);
@@ -473,7 +388,7 @@ function initStage() {
     }
   });
 
-  // manual line-drag (scale-safe)
+  // manual line drag (scale-safe)
   stage.on("mousemove touchmove", () => {
     if (!dragString) return;
     const p = stage.getPointerPosition();
@@ -488,7 +403,7 @@ function initStage() {
     const dx = cx - dragString.startX;
     const dy = cy - dragString.startY;
 
-    const l = (cfg.strings_abs || []).find(x => x.id === dragString.id);
+    const l = cfg.strings_abs.find(x => x.id === dragString.id);
     if (!l) return;
 
     l.x1 = clamp(dragString.x1 + dx, 0, PAGE_W);
@@ -497,10 +412,7 @@ function initStage() {
     l.y2 = clamp(dragString.y2 + dy, 0, PAGE_H);
 
     enforceHV(l);
-
-    // update UI coords live if selected
     if (selected?.type === "string" && selected.id === l.id) setSelected(selected);
-
     drawAll();
   });
 
@@ -508,7 +420,7 @@ function initStage() {
     dragString = null;
   });
 
-  // responsive view scaling (so it fits your browser)
+  // responsive view scaling
   const wrap = document.querySelector(".stage-wrap");
   applyResponsiveScale = () => {
     const maxW = wrap.clientWidth - 40;
@@ -589,9 +501,9 @@ function drawAll() {
     layer.add(aft);
   }
 
-  // holds list (red, left)
-  const hl = cfg.holds_list || { x: hb.x - 70, y_top: hb.y + hb.h - 40, line_gap: 18 };
-  (cfg.holds || []).forEach((hitem, i) => {
+  // holds list (red)
+  const hl = cfg.holds_list;
+  cfg.holds.forEach((hitem, i) => {
     layer.add(new Konva.Text({
       x: 0,
       y: hl.y_top - i * hl.line_gap,
@@ -603,15 +515,10 @@ function drawAll() {
     }));
   });
 
-  // ---------------- Strings ----------------
-  (cfg.strings_abs || []).forEach((ln) => {
+  // strings
+  cfg.strings_abs.forEach((ln) => {
     ln.orientation = normOrient(ln.orientation);
     if (!ln.stroke_width || ln.stroke_width < STRING_THICKNESS) ln.stroke_width = STRING_THICKNESS;
-
-    if (ln.x1 == null) ln.x1 = 240;
-    if (ln.y1 == null) ln.y1 = 480;
-    if (ln.x2 == null) ln.x2 = 720;
-    if (ln.y2 == null) ln.y2 = 480;
 
     enforceHV(ln);
     if (stringLength(ln) < 10) setStringOrientation(ln, ln.orientation);
@@ -625,7 +532,6 @@ function drawAll() {
       hitStrokeWidth: STRING_HIT_WIDTH
     });
 
-    // manual drag start
     line.on("mousedown touchstart", (e) => {
       e.cancelBubble = true;
       const p = stage.getPointerPosition();
@@ -642,14 +548,12 @@ function drawAll() {
       };
     });
 
-    // select
     line.on("click tap", (e) => {
       e.cancelBubble = true;
       setSelected({ type: "string", id: ln.id });
       drawAll();
     });
 
-    // endpoints
     const p1 = new Konva.Circle({ x: ln.x1, y: ln.y1, radius: 6, fill: "#fff", stroke: "#000", strokeWidth: 1, draggable: true });
     const p2 = new Konva.Circle({ x: ln.x2, y: ln.y2, radius: 6, fill: "#fff", stroke: "#000", strokeWidth: 1, draggable: true });
 
@@ -669,10 +573,8 @@ function drawAll() {
       enforceHV(ln);
       if (stringLength(ln) < 10) setStringOrientation(ln, ln.orientation);
 
-      line.points([ln.x1, ln.y1, ln.x2, ln.y2]);
-
       if (selected?.type === "string" && selected.id === ln.id) setSelected(selected);
-      layer.draw();
+      drawAll();
     };
 
     p1.on("click tap", (e) => { e.cancelBubble = true; setSelected({ type: "string", id: ln.id }); drawAll(); });
@@ -683,16 +585,13 @@ function drawAll() {
       else p2.x(p1.x());
       syncEndpoints();
     });
-
     p2.on("dragmove", syncEndpoints);
 
-    layer.add(line);
-    layer.add(p1);
-    layer.add(p2);
+    layer.add(line); layer.add(p1); layer.add(p2);
   });
 
-  // ---------------- Sleeves ----------------
-  (cfg.sleeves_abs || []).forEach((s) => {
+  // sleeves
+  cfg.sleeves_abs.forEach((s) => {
     s.orientation = normOrient(s.orientation);
 
     const w = (s.orientation === "H") ? SLEEVE_LONG : SLEEVE_THICK;
@@ -707,9 +606,9 @@ function drawAll() {
       x: s.x, y: s.y,
       width: w, height: h,
       cornerRadius: SLEEVE_RADIUS,
-      fill: s.fill || cfg.colors.sleeve_fill,
-      stroke: isSel ? "#0066ff" : (s.stroke || cfg.colors.stroke),
-      strokeWidth: s.stroke_width || 1,
+      fill: cfg.colors.sleeve_fill,
+      stroke: isSel ? "#0066ff" : cfg.colors.stroke,
+      strokeWidth: 1,
       draggable: true
     });
 
@@ -732,43 +631,15 @@ function drawAll() {
   layer.draw();
 }
 
-// -------------------- File List --------------------
-async function refreshFileList(selectName=null) {
-  const data = await apiList();
-  ui.fileList.innerHTML = "";
-  (data.files || []).forEach(f => {
-    const opt = document.createElement("option");
-    opt.value = f;
-    opt.textContent = f;
-    ui.fileList.appendChild(opt);
-  });
-  if (selectName) ui.fileList.value = selectName;
-}
-
 // -------------------- Boot --------------------
-async function boot() {
+function boot() {
+  if (!window.Konva) {
+    alert("Konva did not load. Check DevTools > Network for a blocked CDN.");
+    return;
+  }
+
   bindUI();
   initStage();
-
-  await refreshFileList("template.json");
-
-  // auto-load template if present
-  try {
-    if (ui.fileList.value) {
-      cfg = await apiLoad(ui.fileList.value);
-      cfg.sleeves_abs = cfg.sleeves_abs || [];
-      cfg.strings_abs = cfg.strings_abs || [];
-      cfg.holds = cfg.holds || [];
-
-      cfg.strings_abs.forEach(l => {
-        l.orientation = normOrient(l.orientation);
-        if (!l.stroke_width || l.stroke_width < STRING_THICKNESS) l.stroke_width = STRING_THICKNESS;
-        enforceHV(l);
-        if (stringLength(l) < 10) setStringOrientation(l, l.orientation);
-      });
-    }
-  } catch (e) {}
-
   syncUIFromCfg();
   drawAll();
 }
