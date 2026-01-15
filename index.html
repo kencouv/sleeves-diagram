@@ -2,161 +2,136 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Sleeves Diagram Editor</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sleeves Diagram Tool</title>
+
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; }
-    .wrap { display: flex; height: 100vh; }
-    .panel { width: 360px; padding: 12px; border-right: 1px solid #ddd; overflow: auto; }
-    .right { width: 320px; padding: 12px; border-left: 1px solid #ddd; overflow: auto; }
-    .canvas-area { flex: 1; display: flex; flex-direction: column; min-width: 520px; }
-    .toolbar { padding: 10px; border-bottom: 1px solid #ddd; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    .stage-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #f6f6f6; }
-    #stage-container { background: white; border: 1px solid #ccc; }
-    label { display:block; margin-top:8px; font-size: 12px; color:#333; }
-    input, select { width: 100%; padding: 6px; box-sizing: border-box; }
-    button { padding: 8px 10px; cursor: pointer; }
-    .small { font-size: 12px; color: #666; }
-    .row { display:flex; gap:8px; }
-    .row > div { flex:1; }
-    table { width:100%; border-collapse: collapse; margin-top: 6px; }
-    td, th { border: 1px solid #ddd; padding: 6px; font-size: 12px; }
-    th { background:#f0f0f0; }
-
-    /* simple debug banner (helps confirm JS loaded) */
-    #status {
-      font-size: 12px;
-      padding: 6px 10px;
-      border-bottom: 1px solid #eee;
-      background: #fffbe6;
-      color: #333;
+    body { margin:0; font-family: Arial, sans-serif; }
+    .topbar {
+      display:flex; gap:10px; align-items:center;
+      padding:10px; border-bottom:1px solid #ddd;
+      position:sticky; top:0; background:#fff; z-index:5;
     }
-    #status.ok { background: #e9ffe6; }
-    #status.err { background: #ffe6e6; }
+    .wrap { display:grid; grid-template-columns: 320px 1fr 320px; height: calc(100vh - 52px); }
+    .panel { padding:12px; overflow:auto; border-right:1px solid #eee; }
+    .panel.right { border-right:none; border-left:1px solid #eee; }
+    label { display:block; font-size:12px; margin-top:10px; color:#333; }
+    input, select, button { font-size:14px; padding:6px; }
+    input, select { width:100%; box-sizing:border-box; }
+    button { cursor:pointer; }
+    .btn { padding:8px 12px; }
+    .hint { color:#666; font-size:12px; margin-left:8px; }
+    .stage-wrap { width:100%; height:100%; padding:18px; box-sizing:border-box; overflow:auto; }
+    #stage-container { display:inline-block; }
+    table { width:100%; border-collapse:collapse; margin-top:6px; }
+    th, td { border:1px solid #ddd; padding:6px; font-size:13px; }
+    th { background:#f6f6f6; }
+    .row3 { display:grid; grid-template-columns: 1fr 1fr auto; gap:6px; align-items:center; }
+    .smallbtn { padding:6px 10px; }
+    .sectionTitle { font-weight:bold; margin-top:14px; }
+    .divider { height:1px; background:#eee; margin:12px 0; }
   </style>
+
+  <!-- Konva + jsPDF from CDN (works on GitHub Pages) -->
+  <script src="https://cdn.jsdelivr.net/npm/konva@9.3.16/konva.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 </head>
+
 <body>
-
-<div id="status">Loading editor…</div>
-
-<div class="wrap">
-  <div class="panel">
-    <h3>Diagram Info</h3>
-
-    <label>Load Config</label>
-    <div class="row">
-      <div><select id="fileList"></select></div>
-      <div><button id="btnLoad">Load</button></div>
-    </div>
-
-    <label>Save As (config name)</label>
-    <input id="cfgName" value="template.json"/>
-
-    <label>Ship Name</label>
-    <input id="shipName"/>
-
-    <label>Title (red)</label>
-    <input id="titleText"/>
-
-    <label style="margin-top:10px;">
-      <input type="checkbox" id="showLabels" checked>
-      Show 4 side labels
-    </label>
-
-    <label>STARBOARD</label><input id="lblStarboard"/>
-    <label>PORT</label><input id="lblPort"/>
-    <label>Forward</label><input id="lblForward"/>
-    <label>Aft</label><input id="lblAft"/>
-
-    <h3 style="margin-top:14px;">Holds List</h3>
-    <div class="small">Add rows. This prints in red on the left.</div>
-    <table id="holdsTable">
-      <thead><tr><th>Hold</th><th>Sleeves</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <button id="addHold">+ Add Hold</button>
+  <div class="topbar">
+    <button class="btn" id="addSleeve">+ Sleeve</button>
+    <button class="btn" id="addString">+ String</button>
+    <button class="btn" id="dupSelected">Duplicate</button>
+    <button class="btn" id="delSelected">Delete</button>
+    <button class="btn" id="exportPdf">Export PDF</button>
+    <span class="hint">Tip: click an item to select. Press Delete key too.</span>
   </div>
 
-  <div class="canvas-area">
-    <div class="toolbar">
-      <button id="addSleeve">+ Sleeve</button>
-      <button id="addString">+ String</button>
-      <button id="dupSelected">Duplicate</button>
-      <button id="delSelected">Delete</button>
-      <button id="saveCfg">Save</button>
-      <button id="exportPdf">Export PDF</button>
-      <span class="small">Tip: click an item to select. Press Delete key too.</span>
+  <div class="wrap">
+    <!-- LEFT -->
+    <div class="panel">
+      <div class="sectionTitle">Diagram Info</div>
+
+      <label>Ship Name</label>
+      <input id="shipName" placeholder="M/V ..." />
+
+      <label>Title (red)</label>
+      <input id="titleText" placeholder="Diagram of Sleeves in Holds" />
+
+      <div class="divider"></div>
+
+      <label>
+        <input type="checkbox" id="showLabels" style="width:auto; margin-right:8px;" checked />
+        Show 4 side labels
+      </label>
+
+      <label>STARBOARD</label>
+      <input id="lblStarboard" />
+
+      <label>PORT</label>
+      <input id="lblPort" />
+
+      <label>Forward</label>
+      <input id="lblForward" />
+
+      <label>Aft</label>
+      <input id="lblAft" />
+
+      <div class="divider"></div>
+
+      <div class="sectionTitle">Holds List</div>
+      <div class="hint">Add rows. This prints in red on the left.</div>
+
+      <table id="holdsTable">
+        <thead>
+          <tr><th>Hold</th><th>Sleeves</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <button class="btn" id="addHold" style="margin-top:8px;">+ Add Hold</button>
     </div>
+
+    <!-- CENTER -->
     <div class="stage-wrap">
       <div id="stage-container"></div>
     </div>
-  </div>
 
-  <div class="right">
-    <h3>Selected Item</h3>
-    <div class="small">Sleeves & strings are H/V only. Sizes are fixed.</div>
+    <!-- RIGHT -->
+    <div class="panel right">
+      <div class="sectionTitle">Selected Item</div>
+      <div class="hint">Sleeves & strings are H/V only. Sizes are fixed.</div>
 
-    <div id="selNone" class="small" style="margin-top:10px;">Nothing selected.</div>
+      <div id="selNone" style="margin-top:10px;">Nothing selected.</div>
 
-    <div id="selSleeve" style="display:none; margin-top:10px;">
-      <label>X</label><input id="sx">
-      <label>Y</label><input id="sy">
-      <label>Orientation</label>
-      <select id="sOrient">
-        <option value="H">Horizontal</option>
-        <option value="V">Vertical</option>
-      </select>
-      <button id="applySleeve" style="margin-top:8px;">Apply</button>
-    </div>
-
-    <div id="selString" style="display:none; margin-top:10px;">
-      <label>Orientation</label>
-      <select id="lOrient">
-        <option value="H">Horizontal</option>
-        <option value="V">Vertical</option>
-      </select>
-
-      <div class="small" style="margin-top:6px;">
-        Drag the line to move it. Drag endpoints to change length.
+      <div id="selSleeve" style="display:none; margin-top:10px;">
+        <label>X</label><input id="sx" />
+        <label>Y</label><input id="sy" />
+        <label>Orientation</label>
+        <select id="sOrient">
+          <option value="H">Horizontal</option>
+          <option value="V">Vertical</option>
+        </select>
+        <button class="btn" id="applySleeve" style="margin-top:10px;">Apply</button>
       </div>
 
-      <label>X1</label><input id="x1">
-      <label>Y1</label><input id="y1">
-      <label>X2</label><input id="x2">
-      <label>Y2</label><input id="y2">
+      <div id="selString" style="display:none; margin-top:10px;">
+        <label>Orientation</label>
+        <select id="lOrient">
+          <option value="H">Horizontal</option>
+          <option value="V">Vertical</option>
+        </select>
 
-      <button id="applyString" style="margin-top:8px;">Apply</button>
+        <label>X1</label><input id="x1" />
+        <label>Y1</label><input id="y1" />
+        <label>X2</label><input id="x2" />
+        <label>Y2</label><input id="y2" />
+
+        <button class="btn" id="applyString" style="margin-top:10px;">Apply</button>
+      </div>
     </div>
   </div>
-</div>
 
-<!-- Konva: try local first; if missing, fall back to CDN automatically -->
-<script
-  src="/static/konva.min.js"
-  onerror="this.onerror=null;this.src='https://unpkg.com/konva@9/konva.min.js';">
-</script>
-
-<!-- Your app -->
-<script src="/static/app.js"></script>
-
-<!-- Status banner helper -->
-<script>
-  // If app.js boots successfully, it can set window.__SLEEVES_EDITOR_OK__ = true
-  // But even without that, we can still check whether Konva loaded.
-  window.addEventListener('load', () => {
-    const el = document.getElementById('status');
-    if (typeof Konva === 'undefined') {
-      el.textContent = 'Error: Konva failed to load. (Check network/firewall) Open DevTools Console.';
-      el.className = 'err';
-    } else {
-      // app.js should populate inputs; if not, it likely errored—still helpful to show “Konva OK”
-      el.textContent = 'Konva loaded. If dropdown is still empty, open DevTools Console for a JS error.';
-      el.className = 'ok';
-      // hide after a moment
-      setTimeout(() => { el.style.display = 'none'; }, 2500);
-    }
-  });
-</script>
-
+  <script src="./app.js" defer></script>
 </body>
 </html>
